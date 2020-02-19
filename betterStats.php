@@ -37,7 +37,6 @@ class betterStats extends PluginBase
     public function beforeControllerAction()
     {
         if ($this->event->get('controller') == 'statistics_user') {
-            echo '<pre>';
             $surveyid = Yii::app()->getRequest()->getQuery('surveyid');
             $language = Yii::app()->getRequest()->getQuery('language');
             $this->actionAction($surveyid, $language);
@@ -46,179 +45,144 @@ class betterStats extends PluginBase
         }
     }
 
-    public function validateSurveyID($survey) {
-        $iSurveyID = (int) $survey->sid;
-        $this->iSurveyID = $survey->sid;
-
-        if (!isset($iSurveyID)) {
-            $iSurveyID = returnGlobal('sid');
-        } else {
-            $iSurveyID = (int) $iSurveyID;
+    public function validateSurveyID($surveyId) {
+        if (!isset($surveyId)) {
+            $surveyId = returnGlobal('sid');
         }
-        if (!$iSurveyID) {
+        if (!$surveyId) {
             throw new CHttpException(404, 'You have to provide a valid survey ID.');
         }
 
-        $actresult = Survey::model()->findAll('sid = :sid AND active = :active', array(':sid' => $iSurveyID, ':active' => 'Y')); //Checked
+        $actresult = Survey::model()->findAll('sid = :sid AND active = :active', array(':sid' => $surveyId, ':active' => 'Y')); //Checked
         if (count($actresult) == 0) {
             throw new CHttpException(404, 'You have to provide a valid survey ID.');
+        }
+        foreach($actresult as $act) {
+            if ($act->publicstatistics != 'Y') {
+                throw new CHttpException(401, "This survey does not provide public statistics");
+            }
         }
 
         return true;
     }
 
-    /**
-     * This is a copy/paste from `application/controllers/Statistics_userController.php`
-     * @param $surveyid
-     * @param null $language
-     * @throws CHttpException
-     */
-    public function actionAction($surveyid, $language = null)
-    {
-        $sLanguage = $language;
-        $survey = Survey::model()->findByPk($surveyid);
-
-        $this->sLanguage = $language;
-
-        Yii::app()->loadHelper('database');
-        Yii::app()->loadHelper('surveytranslator');
-        // The stuff we'll pass to the templating engine in the end.
-        $data = array();
-
-        $this->validateSurveyID($survey);
-        $iSurveyID = (int) $survey->sid;
-        $this->iSurveyID = $survey->sid;
-
-        $surveyinfo = getSurveyInfo($iSurveyID);
-        $thisSurveyTitle = $surveyinfo["name"];
-        $thisSurveyCssPath = getTemplateURL($surveyinfo["template"]);
-        if ($surveyinfo['publicstatistics'] != 'Y') {
-            throw new CHttpException(401, 'The public statistics for this survey are deactivated.');
-        }
-
-        //check if graphs should be shown for this survey
-        if ($survey->isPublicGraphs) {
-            $publicgraphs = 1;
-        } else {
-            $publicgraphs = 0;
-        }
-
-        // Set language for questions and labels to base language of this survey
-        if ($sLanguage == null || !in_array($sLanguage, Survey::model()->findByPk($iSurveyID)->getAllLanguages())) {
-            $sLanguage = Survey::model()->findByPk($iSurveyID)->language;
-        } else {
-            $sLanguage = sanitize_languagecode($sLanguage);
-        }
-
-
-        //set survey language for translations
-        SetSurveyLanguage($iSurveyID, $sLanguage);
-        $condition = false;
-        $sitename = Yii::app()->getConfig("sitename");
-
-        $data['surveylanguage'] = $sLanguage;
-        $data['sitename'] = $sitename;
-        $data['condition'] = $condition;
-        $data['thisSurveyCssPath'] = $thisSurveyCssPath;
-        $data['thisSurveyTitle'] = $thisSurveyTitle;
-        $data['totalrecords'] = $this->getTotalRecords($survey);
-
+    private function loadSurveyData($surveyId, $language) {
         Yii::app()->loadHelper('admin/exportresults');
-
         $oFormattingOptions = new FormattingOptions();
         $oFormattingOptions->responseMinRecord=1;
-        $oFormattingOptions->responseMaxRecord=SurveyDynamic::model($iSurveyID)->getMaxId();
+        $oFormattingOptions->responseMaxRecord=SurveyDynamic::model($surveyId)->getMaxId();
         $oFormattingOptions->responseCompletionState='complete';
         $oFormattingOptions->headingFormat='full';// Maybe make own to have code + abbreviated
         $oFormattingOptions->answerFormat='long';
 
         $surveyDao = new SurveyDao();
-        $surveyInfo = $surveyDao->loadSurveyById($iSurveyID, $sLanguage, $oFormattingOptions);
+        $surveyInfo = $surveyDao->loadSurveyById($surveyId, $language, $oFormattingOptions);
         $surveyDao->loadSurveyResults($surveyInfo, $oFormattingOptions->responseMinRecord, $oFormattingOptions->responseMaxRecord, '', $oFormattingOptions->responseCompletionState, $oFormattingOptions->selectedColumns, $oFormattingOptions->aResponses);
-
         $responses = array();
         foreach($surveyInfo->responses as $response) {
             $responses []= $response;
         }
 
-        $questions = $this->getPublicStatisticsQuestions($iSurveyID, $sLanguage);
-        echo 'Questions<br/>';
-        print_r($questions);
-        echo 'fieldMap<br/>';
-        print_r($surveyInfo->fieldMap);
+        $allQuestionsToChart = array();
 
-        // Transpose the response into a table
-        $per_sgqa = array();
-        foreach($responses as $response) {
-            foreach($response as $k => $v) {
-                if ($v != '') {
-                    if (array_key_exists($k, $per_sgqa)) {
-                        $per_sgqa[$k] []= $v;
-                    } else {
-                        $per_sgqa[$k] = array($v);
-                    }
-                }
-            }
-        }
-
-        /*
-         *  We have:
-         * - the list of questions (with qid) for which we need to display stats
-         * - the "fieldMap", that tells sur SGQA -> qid (plus other question information
-         * - all the responses, as SGQA -> data
-         *
-         * What we want:
-         * For each question to describe, the list of answers (can have more than one).
-         * Some questions have several subquestions, we need to deal with that.
-         */
-
-        $questionMapped = array();
-        foreach($questions as $question) {
-            $question['answers'] = array();
-            foreach($surveyInfo->fieldMap as $map) {
-                if ($map['qid'] == $question['qid']) {
-                    $question['answers'][] = array_merge(
-                        $map,
-                        array('values' => $per_sgqa[$map['fieldname']])
+        foreach ($surveyInfo->questions as $question) {
+            if ($question['parent_qid'] == 0) {
+                $attrs = $this->getQuestionAttributes($question, $language);
+                if ($attrs['public_statistics'] == 1) {
+                    $allQuestionsToChart []= array_merge(
+                        $question,
+                        array('attributes' => $attrs),
+                        array('subquestion' => $this->loadSubQuestions($surveyInfo, $question, $responses))
                     );
                 }
             }
-            $questionMapped[] = $question;
         }
-        print_r($questionMapped);
-
-
-        if ($surveyInfo->responses instanceof CDbDataReader) {
-            $surveyInfo->responses->close();
-        }
+        usort($allQuestionsToChart, 'groupOrderThenQuestionOrder');
+        return $allQuestionsToChart;
     }
 
-    public function getPublicStatisticsQuestions($surveyId, $sLanguage) {
-        $query = "SELECT q.* , group_name, group_order FROM {{questions}} q, {{groups}} g, {{question_attributes}} qa
-                    WHERE g.gid = q.gid AND g.language = :lang1 AND q.language = :lang2 AND q.sid = :surveyid AND q.qid = qa.qid AND q.parent_qid = 0 AND qa.attribute = 'public_statistics'";
-        $databasetype = Yii::app()->db->getDriverName();
-        if ($databasetype == 'mssql' || $databasetype == "sqlsrv" || $databasetype == "dblib") {
-            $query .= " AND CAST(CAST(qa.value as varchar) as int)='1'\n";
+    private function getQuestionAttributes(array $question, string $language) {
+        // if it's a "subquestion", we get attributes from the parent
+        if ($question['parent_qid'] != 0) {
+            $qid = $question['parent_qid'];
         } else {
-            $query .= " AND qa.value='1'\n";
+            $qid = $question['qid'];
         }
-        $result = Yii::app()->db->createCommand($query)->bindParam(":lang1", $sLanguage, PDO::PARAM_STR)->bindParam(":lang2", $sLanguage, PDO::PARAM_STR)->bindParam(":surveyid", $surveyId, PDO::PARAM_INT)->queryAll();
-        $rows = $result;
-        //SORT IN NATURAL ORDER!
-        usort($rows, 'groupOrderThenQuestionOrder');
+        $attrs = QuestionAttribute::model()->getQuestionAttributes($qid, $language);
+        return array(
+            'statistics_showgraph' => $attrs['statistics_showgraph'],
+            'statistics_graphtype' => $attrs['statistics_graphtype'],
+            'public_statistics' => $attrs['public_statistics']
+        );
+    }
 
+    private function loadSubQuestions(SurveyObj $surveyInfo, array $question, array $responses) {
         $res = array();
-        foreach ($rows as $row) {
-            $res[] = array(
-                'qid' => $row['qid'],
-                'gid' => $row['gid'],
-                'type' => $row['type'],
-                'title' => $row['title'],
-                'group_name' => $row['group_name'],
-                'question' => flattenText($row['question'])
-            );
+        foreach($surveyInfo->questions as $sq) {
+            if ($sq['parent_qid'] == $question['qid']) {
+                $res [] = $this->loadQuestionAnswersAndResponses($surveyInfo, $sq, $responses, true);
+            }
         }
+        if (count($res) == 0) {
+            $res []= $this->loadQuestionAnswersAndResponses($surveyInfo, $question, $responses, false);
+        }
+
+        usort($res, 'groupOrderThenQuestionOrder');
         return $res;
+    }
+
+    private function getQuestionSGQA(SurveyObj $surveyInfo, array $question, $isSubQuestion = false) {
+        $fm = $surveyInfo->fieldMap;
+        foreach ($fm as $field) {
+            if ($isSubQuestion) {
+                if (array_key_exists('sqid', $field) && $field['sqid'] == $question['qid']) {
+                    $sgqa = $field['fieldname'];
+                    break;
+                }
+            } else {
+                if ($field['qid'] == $question['qid']) {
+                    $sgqa = $field['fieldname'];
+                    break;
+                }
+            }
+        }
+        if (!isset($sgqa)) {
+            throw new Exception("I can not find this question in the fieldmap. This should not happen");
+        }
+        return $sgqa;
+    }
+
+    private function loadQuestionAnswersAndResponses(SurveyObj $surveyInfo, array $question, array $responses, $isSubQuestion = false) {
+        $sgqa = $this->getQuestionSGQA($surveyInfo, $question, $isSubQuestion);
+        $responseReturn = array();
+        foreach($responses as $response) {
+            if (array_key_exists($sgqa, $response) && $response[$sgqa] != '') {
+                $responseReturn []= $response[$sgqa];
+            }
+        }
+        $answers = Answer::model()->getAnswers($question['qid'])->readAll();
+
+        return array_merge(
+            $question,
+            array(
+                'responses' => $responseReturn,
+                'answers' => $answers
+            )
+        );
+    }
+
+    /**
+     * @param $surveyid
+     * @param null $language
+     * @throws CHttpException
+     */
+    public function actionAction($surveyId, $language = null) {
+        $this->validateSurveyID($surveyId);
+        $data = array();
+        $data['data'] = $this->loadSurveyData($surveyId, $language);
+        $data['surveyinfo'] = getSurveyInfo($surveyId, $language);
+
+        $this->renderPartial('index', $data, false);
     }
 
     public function getTotalRecords($survey) {
