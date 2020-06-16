@@ -5,6 +5,8 @@
  * @version 1.1.1
  *
  * @category Plugin
+ * @author Emmanuel Prochasson
+ * @license MIT
  */
 
 
@@ -43,6 +45,24 @@ class betterStats extends PluginBase
         }
     }
 
+    /**
+     * @param $surveyid
+     * @param null $language
+     * @throws CHttpException
+     */
+    public function actionAction($surveyId, $language = null) {
+        $this->validateSurveyID($surveyId);
+        $data = array();
+        $data['data'] = $this->loadSurveyData($surveyId, $language);
+        $data['surveyinfo'] = getSurveyInfo($surveyId, $language);
+
+        $this->renderPartial('index', $data, false);
+    }
+
+
+    /**
+     * Make sure a survey exists and can be exposed
+     */
     public function validateSurveyID($surveyId) {
         if (!isset($surveyId)) {
             $surveyId = returnGlobal('sid');
@@ -64,18 +84,30 @@ class betterStats extends PluginBase
         return true;
     }
 
+    /**
+     * Fetch all the questions and their answers and sort that out. We try to rely on LimeSurveys own API rather than
+     * hitting the database directly.
+     *
+     * @param $surveyId
+     * @param $language
+     * @return array
+     */
     private function loadSurveyData($surveyId, $language) {
         Yii::app()->loadHelper('admin/exportresults');
+        // EP: That next block of code is some LimeSurvey cryptic voodoo magic we adapted from their own code.
         $oFormattingOptions = new FormattingOptions();
         $oFormattingOptions->responseMinRecord=1;
         $oFormattingOptions->responseMaxRecord=SurveyDynamic::model($surveyId)->getMaxId();
         $oFormattingOptions->responseCompletionState='complete';
         $oFormattingOptions->headingFormat='full';// Maybe make own to have code + abbreviated
         $oFormattingOptions->answerFormat='long';
-
         $surveyDao = new SurveyDao();
         $surveyInfo = $surveyDao->loadSurveyById($surveyId, $language, $oFormattingOptions);
-        $surveyDao->loadSurveyResults($surveyInfo, $oFormattingOptions->responseMinRecord, $oFormattingOptions->responseMaxRecord, '', $oFormattingOptions->responseCompletionState, $oFormattingOptions->selectedColumns, $oFormattingOptions->aResponses);
+        $surveyDao->loadSurveyResults($surveyInfo, $oFormattingOptions->responseMinRecord,
+            $oFormattingOptions->responseMaxRecord, '', $oFormattingOptions->responseCompletionState,
+            $oFormattingOptions->selectedColumns, $oFormattingOptions->aResponses
+        );
+
         $responses = array();
         foreach($surveyInfo->responses as $response) {
             $responses []= $response;
@@ -99,6 +131,12 @@ class betterStats extends PluginBase
         return $allQuestionsToChart;
     }
 
+    /**
+     * Fetch Questions meta information, typically if it's made public and if charts should be displayed
+     * @param array $question
+     * @param string $language
+     * @return array
+     */
     private function getQuestionAttributes(array $question, string $language) {
         // if it's a "subquestion", we get attributes from the parent
         if ($question['parent_qid'] != 0) {
@@ -170,19 +208,10 @@ class betterStats extends PluginBase
     }
 
     /**
-     * @param $surveyid
-     * @param null $language
-     * @throws CHttpException
+     * Calculate how many answers exist for a survey. Not used, but could be useful.
+     * @param $survey
+     * @return mixed
      */
-    public function actionAction($surveyId, $language = null) {
-        $this->validateSurveyID($surveyId);
-        $data = array();
-        $data['data'] = $this->loadSurveyData($surveyId, $language);
-        $data['surveyinfo'] = getSurveyInfo($surveyId, $language);
-
-        $this->renderPartial('index', $data, false);
-    }
-
     public function getTotalRecords($survey) {
         //count number of answers
         $query = "SELECT count(*) FROM ".$survey->responsesTableName;
