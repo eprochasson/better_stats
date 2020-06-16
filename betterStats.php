@@ -10,7 +10,6 @@
 
 class betterStats extends PluginBase
 {
-
     protected $storage = 'DbStorage';
     static protected $description = 'Show better stats on survey completion';
     static protected $name = 'BetterStats';
@@ -26,7 +25,6 @@ class betterStats extends PluginBase
             'type' => 'string',
             'label' => 'Message'
         ),
-
     );
 
     public function init()
